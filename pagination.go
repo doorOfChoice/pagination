@@ -1,10 +1,14 @@
 package pagination
 
-import "net/http"
-import "strings"
-import "github.com/astaxie/beego/orm"
-import "strconv"
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/astaxie/beego/orm"
+)
 
 const (
 	DEFAULT_PERPAGE   = 15
@@ -32,12 +36,17 @@ type Paginator struct {
 	CurrentPage int64
 	MaxPage     int64
 
+	OffsetFrom int64 //开始下标，用于区域分页
+	OffsetTo   int64 //结束下标，用于区域分页
+
 	BasePath  string
 	Data      interface{}
 	Links     []Link
 	LinkCount int64
 
-	o orm.QuerySeter
+	o     orm.QuerySeter
+	omer  orm.Ormer
+	field string
 }
 
 //generate url include query string
@@ -66,6 +75,7 @@ func getBasePath(url string) string {
 	if n := strings.Index(url, "?"); n != -1 {
 		return url[:n]
 	}
+
 	return url
 }
 
@@ -77,6 +87,24 @@ func toInt64(str string) int64 {
 		return 1
 	} else {
 		return int64(n)
+	}
+
+}
+
+//将除了page以外的参数原封不动的加上
+func (p *Paginator) loadQueryArgs() {
+	r, _ := regexp.Compile(`^(\w+?)=(\w+?)(&(\w+?)=(\w+?))*$`)
+
+	if !r.Match([]byte(p.Request.URL.RawQuery)) {
+		return
+	}
+
+	args := strings.Split(p.Request.URL.RawQuery, "&")
+	for _, v := range args {
+		keyValues := strings.Split(v, "=")
+		if keyValues[0] != "page" {
+			p.BasePath = LoadLink(p.BasePath, keyValues[0], keyValues[1])
+		}
 	}
 
 }
@@ -167,6 +195,10 @@ func (p *Paginator) generateLinks(from, to int64) []Link {
 	return links
 }
 
+//o: need a query seter, such as o.QueryTable("user")
+//tp: the interface to get datas
+//params[0], count of show href link in paginatior DEFAULT:5
+//params[1], count of show data in per page DEFAULT 15
 func NewPaginator(r *http.Request, o orm.QuerySeter, tp interface{}, params ...int64) *Paginator {
 	p := &Paginator{
 		Request:   r,
@@ -177,11 +209,16 @@ func NewPaginator(r *http.Request, o orm.QuerySeter, tp interface{}, params ...i
 		o:         o,
 	}
 
+	p.loadQueryArgs()
+
+	//生成数据
 	if params != nil && len(params) == 2 {
 		p.PerValue = params[1]
 	}
+
 	p.generateData()
 
+	//生成分页链接
 	if params != nil {
 		if params[0] > p.MaxPage {
 			p.LinkCount = p.MaxPage
@@ -189,6 +226,7 @@ func NewPaginator(r *http.Request, o orm.QuerySeter, tp interface{}, params ...i
 			p.LinkCount = params[0]
 		}
 	}
+
 	p.loadLinks()
 
 	return p
